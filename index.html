@@ -85,6 +85,7 @@ summary{cursor:pointer;font-weight:600;padding:12px 0;min-height:44px}
 <section class="panel"><h2>집계 데이터</h2><p id="dataStatus"></p><p class="small">GA에서 조회한 이벤트 발생 수를 불러와요. 데이터는 이 파일 안에서만 처리해요.</p><details><summary>데이터 입력·불러오기</summary><label for="jsonFile">JSON 파일</label><input type="file" id="jsonFile" accept=".json,application/json"><label for="jsonInput">집계 JSON 붙여넣기</label><textarea id="jsonInput" rows="8" spellcheck="false" placeholder='{"start":"2026-07-02","end":"2026-09-30","rows":[]}'></textarea><button id="importData" class="wide">데이터 적용</button><button id="template" class="wide">입력 양식 다운로드</button><p class="small">행마다 event_name, campaign_id, placement_key, event_count가 필요해요. 배너별 집계에는 banner_id(클릭은 id도 가능)를 추가해요. 전체 조회를 확인한 경우에만 completeViews / completeClicks를 true로 설정해요.</p></details><details><summary>조회 기준</summary><p class="small">노출: view__promotion_banner<br>클릭: click_promotion_banner<br>집계: 캠페인 × 위치별 이벤트 수<br>카피 비교: 배너 ID별 집계가 추가로 필요해요.<br>사용자 수가 아닌 발생 횟수 기준이에요.</p></details></section></aside>
 <div><div class="metrics" id="metrics"></div>
 <section class="panel section"><div class="headrow"><div><h2>서로 다른 배너, 같은 카피</h2><p class="small">같은 카피의 배너 ID를 하나의 세트로 묶어주세요.</p></div><div class="editing"><label for="copyCount" style="margin:0 0 5px">카피 종류</label><input class="count" id="copyCount" type="number" min="1" max="30"></div></div><div class="copy-grid" id="copies"></div><details class="editing"><summary id="mappingStatus"></summary><label for="bannerList">분석 대상 배너 ID (쉼표 또는 줄바꿈으로 구분)</label><textarea id="bannerList" rows="2"></textarea><button id="applyBanners">배너 목록 적용</button><div class="table-wrap"><table><thead><tr><th>배너 ID</th><th>규격</th><th>카피 세트</th></tr></thead><tbody id="mapping"></tbody></table></div></details></section>
+<section class="panel section"><h2>카피별 전체 성과</h2><p class="small">전체 위치 합산 · CTR = 클릭 합계 ÷ 노출 합계 × 100</p><div id="copyTotals"></div><p class="small">위치·노출 대상의 구성이 달라 카피 자체의 효과를 단정할 수는 없어요.</p></section>
 <section class="panel section"><div class="headrow"><div><h2>위치별 성과</h2></div><select id="placement" aria-label="비교할 위치"><option value="">전체 위치</option></select></div><p class="small">클릭률 = 클릭 수 ÷ 노출 수 × 100 · 같은 위치 안에서 비교해요.</p><div id="placementSummary"></div><h3>위치별 카피 비교</h3><div id="comparison"></div><p class="small">관측 클릭률 순위이며 통계적 유의성을 판정하지 않아요. 노출 대상·기간·기기·배너 규격 차이가 결과에 영향을 줄 수 있어요.</p></section>
 <section class="panel"><div class="headrow"><h2>원본 집계</h2><span id="rowCount" class="tag"></span></div><p class="small">카피를 연결하기 전에도 원본 데이터는 확인할 수 있어요.</p><div id="raw"></div></section>
 <div class="footer">로컬 대시보드의 ‘GitHub에 저장’으로 현재 입력과 데이터를 PR에 보관하세요.<div id="savedAt" class="data-meta"></div></div></div></div></main><div id="message" role="status" aria-live="polite"></div>
@@ -142,7 +143,10 @@ summary{cursor:pointer;font-weight:600;padding:12px 0;min-height:44px}
       return {placement:g.placement,view,click,ctr};
     });
   }
-  const api={VIEW,CLICK,validate,aggregate,aggregatePlacements};
+  function aggregateCopies(data,campaign,copies){
+    return aggregate({...data,rows:data.rows.map(row=>({...row,placement_key:'전체 위치'}))},campaign,copies);
+  }
+  const api={VIEW,CLICK,validate,aggregate,aggregatePlacements,aggregateCopies};
   if(typeof module!=='undefined')module.exports=api;else root.Promotion=api;
 })(typeof window!=='undefined'?window:this);
 </script><script>'use strict';
@@ -176,6 +180,11 @@ function renderAnalysis(){
  $('metrics').innerHTML=[['캠페인 노출 수',valueView,metricNote],['캠페인 클릭 수',valueClick,metricNote],['캠페인 클릭률',pct(totalCTR),totalCTR===null?'정확한 전체 집계가 필요해요':'클릭 합계 ÷ 노출 합계']].map(([name,n,note])=>`<div class="metric"><span class="small">${name}</span><div class="num">${esc(n)}</div><span class="small">${note}</span></div>`).join('');
  $('dataStatus').textContent=!state.data?'세부 집계 입력 대기':!ready?'기간 불일치 · 새 집계를 불러오세요':`${rows.length}행 · ${state.data.source}`;
  const result=ready?Promotion.aggregate(state.data,state.active,c.copies):{rows:[],excluded:{rows:0,view:0,click:0}};
+ const totalResult=ready?Promotion.aggregateCopies(state.data,state.active,c.copies):{rows:[],excluded:{rows:0,view:0,click:0}};
+ const totalCopies=c.copies.map((copy,i)=>({key:copy.key,text:copy.text,set:i+1,...(totalResult.rows.find(r=>r.key===copy.key)||{view:null,click:null,ctr:null})})).sort((a,b)=>(b.ctr??-1)-(a.ctr??-1));
+ const maxCopyCTR=Math.max(...totalCopies.map(r=>r.ctr??0),0);
+ $('copyTotals').innerHTML=totalCopies.map(r=>`<div class="rankrow"><div><strong>세트 ${r.set} · ${esc(r.text||'문구 미입력')}</strong><p class="small">노출 ${fmt(r.view)} · 클릭 ${fmt(r.click)}</p><div class="bar"><span style="width:${r.ctr===null||!maxCopyCTR?0:r.ctr/maxCopyCTR*100}%"></span></div></div><div class="score">${pct(r.ctr)}</div></div>`).join('');
+ if(totalResult.excluded.rows)$('copyTotals').innerHTML+=`<p class="small">미매칭·문구 미입력으로 합산 제외: 노출 ${fmt(totalResult.excluded.view)} · 클릭 ${fmt(totalResult.excluded.click)}</p>`;
  const locationRows=ready?Promotion.aggregatePlacements(state.data,state.active):[];
  const selected=$('placement').value, placements=locationRows.map(r=>r.placement).filter(Boolean).sort();
  $('placement').innerHTML='<option value="">전체 위치</option>'+placements.map(p=>`<option value="${esc(p)}">${esc(p||'위치 미설정')}</option>`).join('');
